@@ -1,110 +1,88 @@
-name: Build and upload assets
+name: Multiplatform test release
 on:
-  release:
-    types: [ published ]
-
+  push:
+    tags: ['rk-2.1.0-multiplatform-test.*']
+permissions:
+  contents: read
 jobs:
   build:
+    name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        # Linux (gnu/amd64 .deb) on ubuntu, Windows x64, macOS arm64.
-        os: [ ubuntu-22.04, windows-latest, macos-latest ]
-    name: Building, ${{ matrix.os }}
+        include:
+          - os: windows-2022
+            platform: windows-x64
+          - os: ubuntu-22.04
+            platform: linux-x64
+          - os: macos-15-intel
+            platform: macos-x64
+          - os: macos-15
+            platform: macos-arm64
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '3'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
-      - name: Fix CRLF on Windows
-        if: runner.os == 'Windows'
-        run: git config --global core.autocrlf false
-
-      - name: Install desktop dependencies
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt install -y libglib2.0-dev libatk1.0-dev libgtk-3-dev librust-atk-dev
-
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build on Windows
+          sudo apt-get install -y build-essential clang libclang-dev cmake pkg-config libssl-dev libglib2.0-dev libatk1.0-dev libgtk-3-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
+      - name: Windows clang
         if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          mkdir kaspa-ng-${{ github.event.release.tag_name }}-windows-x64 || true
-          cargo build --bin kaspa-ng --release
-          cp target/release/kaspa-ng.exe kaspa-ng-${{ github.event.release.tag_name }}-windows-x64/
-          cargo build --bin kaspa-ng --profile console --features console
-          cp target/release/kaspa-ng.exe kaspa-ng-${{ github.event.release.tag_name }}-windows-x64/kaspa-ng-console.exe
-          archive="kaspa-ng-${{ github.event.release.tag_name }}-windows-x64/kaspa-ng-${{ github.event.release.tag_name }}-windows-x64.zip"
-          asset_name="kaspa-ng-${{ github.event.release.tag_name }}-windows-x64.zip"
-          powershell "Compress-Archive kaspa-ng-${{ github.event.release.tag_name }}-windows-x64/* \"${archive}\""
-          echo "asset_path=${archive}" >> $GITHUB_ENV
-          echo "asset_name=${asset_name}" >> $GITHUB_ENV
-
-      - name: Build on MacOS (arm64)
-        if: |
-          runner.os == 'macOS' &&
-          runner.arch == 'ARM64'
-        run: |
-          cargo build --bin kaspa-ng --release
-          mkdir kaspa-ng-${{ github.event.release.tag_name }}-macos-arm64 || true
-          cp target/release/kaspa-ng kaspa-ng-${{ github.event.release.tag_name }}-macos-arm64/
-          archive="kaspa-ng-${{ github.event.release.tag_name }}-macos-arm64/kaspa-ng-${{ github.event.release.tag_name }}-macos-arm64.zip"
-          asset_name="kaspa-ng-${{ github.event.release.tag_name }}-macos-arm64.zip"
-          zip -r "${archive}" ./kaspa-ng-${{ github.event.release.tag_name }}-macos-arm64/*
-          echo "asset_path=${archive}" >> $GITHUB_ENV
-          echo "asset_name=${asset_name}" >> $GITHUB_ENV
-
-      - name: Build on Linux
-        if: runner.os == 'Linux'
-        run: |
-          cargo build --bin kaspa-ng --release
-          mkdir -p .debpkg/usr/bin
-          cp target/release/kaspa-ng .debpkg/usr/bin/
-
-      - name: Create Linux Debian Package
-        if: runner.os == 'Linux'
-        id: package_debian
-        uses: jiro4989/build-deb-action@v3
-        with:
-          package: kaspa-ng
-          package_root: .debpkg
-          maintainer: ASPECTRON
-          version: ${{ github.ref }} # refs/tags/v*.*.*
-          arch: 'amd64'
-          depends: 'libglib2.0-0, libatk1.0-0, libgtk-3-0'
-          desc: 'Kaspa NG desktop p2p node and wallet'
-
-      - name: Upload Windows asset
-        if: runner.os == 'Windows'
-        shell: bash
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ env.asset_path }}" --clobber
-
-      - name: Upload macOS asset
+        shell: pwsh
+        run: '"LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV'
+      - name: macOS clang
         if: runner.os == 'macOS'
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ env.asset_path }}" --clobber
-
-      - name: Upload Debian package
-        if: runner.os == 'Linux'
-        run: gh release upload "${{ github.event.release.tag_name }}" "${{ steps.package_debian.outputs.file_name }}" --clobber
+        run: echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.platform }}
+      - name: Build locked release
+        run: cargo build --locked --release --bin kaspa-ng
+      - name: Smoke test executable
+        shell: bash
+        run: |
+          target/release/kaspa-ng --help | tee help-output.txt
+          grep -F 'rusty-kaspa 2.1.0' help-output.txt
+      - name: Package executable and instructions
+        run: python scripts/package-test-release.py --platform ${{ matrix.platform }} --tag ${{ github.ref_name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.platform }}
+          path: release-dist/*
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: release-dist
+          merge-multiple: true
+      - name: Verify archives and publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd release-dist
+          cat *.sha256 > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease --title "Kaspa NG / RK 2.1.0 - Multiplatform Test" --notes-file ../docs/TEST-RELEASE.md *.zip *.tar.gz SHA256SUMS.txt
