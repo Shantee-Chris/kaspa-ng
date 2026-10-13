@@ -83,6 +83,6 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           cd release-dist
-          cat *.sha256 > SHA256SUMS.txt
+          cat *.sha256 | tr -d '\r' > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
           gh release create "$RELEASE_TAG" --verify-tag --prerelease --title "Kaspa NG / RK 2.1.0 - Multiplatform Test" --notes-file ../docs/TEST-RELEASE.md *.zip *.tar.gz SHA256SUMS.txt
